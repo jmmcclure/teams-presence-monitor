@@ -10,13 +10,17 @@ import argparse
 from logging.handlers import RotatingFileHandler
 from pycaw.pycaw import AudioUtilities
 from paho.mqtt import client as mqtt_client
+from rich.console import Console
+from rich.panel import Panel
 
-# Load config
+# Load configuration
 config = configparser.ConfigParser()
 config.read('config.ini')
 
 # General config
 poll_interval = config.getint('general', 'poll_interval', fallback=5)
+monitor_mic = config.getboolean('general', 'monitor_microphone', fallback=True)
+monitor_cam = config.getboolean('general', 'monitor_camera', fallback=True)
 
 # Logging config
 log_dir = config.get('logging', 'log_dir', fallback='logs')
@@ -36,12 +40,11 @@ log_to_console = log_to_console_cfg or args.debug
 logger = logging.getLogger('TeamsMonitor')
 logger.setLevel(logging.INFO)
 
-# File handler
 file_handler = RotatingFileHandler(log_file, maxBytes=max_log_size, backupCount=log_backups)
 file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
 logger.addHandler(file_handler)
 
-# Optional console logging with color
+# Optional console logging
 if log_to_console:
     try:
         import colorlog
@@ -58,12 +61,16 @@ if log_to_console:
         ))
         logger.addHandler(console_handler)
     except ImportError:
-        fallback = logging.StreamHandler()
-        fallback.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-        logger.addHandler(fallback)
-        logger.warning("colorlog not found—using plain console logs")
+        fallback_handler = logging.StreamHandler()
+        fallback_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+        logger.addHandler(fallback_handler)
+        logger.warning("colorlog not found—console logging without colors")
+
+# Rich dashboard
+console = Console()
 
 # MQTT setup
+mqtt = None
 mqtt_enabled = config.getboolean('mqtt', 'enable', fallback=False)
 if mqtt_enabled:
     mqtt_broker = config.get('mqtt', 'broker')
@@ -72,20 +79,17 @@ if mqtt_enabled:
     topic_cam = config.get('mqtt', 'topic_cam')
 
     try:
-        mqtt = mqtt_client.Client(
-            client_id="",
-            protocol=mqtt_client.MQTTv5,
-            callback_api_version=5
-        )
+        mqtt = mqtt_client.Client(client_id="", protocol=mqtt_client.MQTTv5, callback_api_version=5)
         mqtt.connect(mqtt_broker, mqtt_port)
     except TypeError:
-        logger.warning("MQTTv5 not supported—falling back to MQTTv3.1.1")
+        logger.warning("MQTTv5 not supported—falling back to MQTT v3.1.1")
         mqtt = mqtt_client.Client(protocol=mqtt_client.MQTTv311)
         mqtt.connect(mqtt_broker, mqtt_port)
-    except Exception:
-        logger.exception("Failed to connect to MQTT broker")
+    except Exception as e:
+        mqtt = None
+        logger.warning(f"MQTT setup failed: {e}")
 
-# HA setup
+# Home Assistant setup
 ha_enabled = config.getboolean('homeassistant', 'enable', fallback=False)
 ha_url = config.get('homeassistant', 'base_url', fallback='')
 ha_mic = config.get('homeassistant', 'webhook_mic', fallback='')
@@ -94,7 +98,8 @@ ha_cam = config.get('homeassistant', 'webhook_cam', fallback='')
 def get_handle_exe():
     exe = "handle64.exe" if platform.machine().endswith("64") else "handle.exe"
     path = shutil.which(exe)
-    return path or os.path.join(os.path.dirname(__file__), exe)
+    fallback = os.path.join(os.path.dirname(__file__), exe)
+    return path or fallback if os.path.exists(fallback) else None
 
 def is_microphone_active():
     try:
@@ -115,6 +120,8 @@ def is_webcam_in_use():
         for line in output.lower().splitlines():
             if any(tag in line for tag in ["usbvideo", "usb#vid", "vid_", "camera"]):
                 return True
+    except subprocess.CalledProcessError:
+        logger.warning("handle.exe returned non-zero exit status")
     except Exception as e:
         logger.warning(f"Camera detection failed: {e}")
     return False
@@ -123,30 +130,45 @@ def publish_status(mic_active, cam_active):
     mic_msg = "active" if mic_active else "muted"
     cam_msg = "on" if cam_active else "off"
 
-    if mqtt_enabled:
+    if mqtt_enabled and mqtt:
         try:
-            mqtt.publish(topic_mic, mic_msg)
-            mqtt.publish(topic_cam, cam_msg)
+            if monitor_mic:
+                mqtt.publish(topic_mic, mic_msg)
+            if monitor_cam:
+                mqtt.publish(topic_cam, cam_msg)
             logger.info(f"MQTT published: mic={mic_msg}, cam={cam_msg}")
         except Exception:
             logger.exception("MQTT publish failed")
 
     if ha_enabled:
         try:
-            mic_url = f"{ha_url}/api/webhook/{ha_mic}"
-            cam_url = f"{ha_url}/api/webhook/{ha_cam}"
-            requests.post(mic_url, json={"state": mic_msg}, timeout=2)
-            requests.post(cam_url, json={"state": cam_msg}, timeout=2)
+            if monitor_mic:
+                mic_url = f"{ha_url}/api/webhook/{ha_mic}"
+                requests.post(mic_url, json={"state": mic_msg}, timeout=2)
+            if monitor_cam:
+                cam_url = f"{ha_url}/api/webhook/{ha_cam}"
+                requests.post(cam_url, json={"state": cam_msg}, timeout=2)
             logger.info(f"HA webhooks sent: mic={mic_msg}, cam={cam_msg}")
         except Exception as e:
             logger.warning(f"Home Assistant webhook failed: {e}")
+
+    if log_to_console:
+        lines = []
+        if monitor_mic:
+            mic_str = "[bold green]ACTIVE[/bold green]" if mic_active else "[bold red]MUTED[/bold red]"
+            lines.append(f"🎙️ Microphone: {mic_str}")
+        if monitor_cam:
+            cam_str = "[bold green]ON[/bold green]" if cam_active else "[bold red]OFF[/bold red]"
+            lines.append(f"📷 Camera:     {cam_str}")
+        console.clear()
+        console.print(Panel.fit("\n".join(lines), title="Teams Presence Monitor"))
 
 def monitor_loop():
     logger.info("Teams Presence Monitor started")
     while True:
         try:
-            mic = is_microphone_active()
-            cam = is_webcam_in_use()
+            mic = is_microphone_active() if monitor_mic else False
+            cam = is_webcam_in_use() if monitor_cam else False
             publish_status(mic, cam)
             time.sleep(poll_interval)
         except Exception:

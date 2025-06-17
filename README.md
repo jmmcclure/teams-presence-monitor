@@ -1,6 +1,24 @@
-# Teams Presence Monitor
+# 🎯 Teams Presence Monitor
 
-Monitor your Microsoft Teams mic and webcam status and stream it to MQTT for real-time ESPHome automation. Run it in the background, install it as a Windows service, and trigger physical indicators when you’re "live."
+A Python-based script that detects mic/camera usage and reports real-time status to MQTT and Home Assistant via webhooks.
+
+Supports:
+- ✅ Console + file logging (configurable)
+- ✅ MQTT 5.0 with ESPHome/Home Assistant compatibility
+- ✅ Home Assistant webhook integration
+- ✅ Virtual environment + dependency setup
+- ✅ Colorized logs with `--debug` flag
+- ✅ ⚡ System tray background mode with silent boot startup
+
+---
+
+## ⚙️ Installation
+
+1. Clone this repo:
+   ```bash
+   git clone https://github.com/yourname/teams-presence-monitor.git
+   cd teams-presence-monitor
+
 
 ## 💡 How It Works
 Subscribes to teams/microphone and teams/camera
@@ -21,13 +39,6 @@ Build a desktop cube with different light faces for “Mic Hot” and “Camera 
 - 📜 Rotating log files with up to 3 backups
 
 ---
-
-## 🚀 Quick Setup
-
-1. Clone or unzip the repo
-2. Install Python packages:
-   ```bash
-   pip install -r requirements.txt
 
 ESPHome Integration
 
