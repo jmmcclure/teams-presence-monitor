@@ -1,0 +1,8 @@
+sensor:
+  - platform: mqtt_subscribe
+    name: "Teams Mic"
+    topic: "teams/microphone"
+
+  - platform: mqtt_subscribe
+    name: "Teams Camera"
+    topic: "teams/camera"
