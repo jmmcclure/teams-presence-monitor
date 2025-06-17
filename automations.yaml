@@ -1,0 +1,8 @@
+- alias: "Teams Mic Active"
+  trigger:
+    platform: webhook
+    webhook_id: teams_mic_hot
+  action:
+    - service: light.turn_on
+      data:
+        entity_id: light.office_led
